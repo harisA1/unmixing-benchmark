@@ -49,6 +49,29 @@ pattern agrees on 99% of the entries. Consequences:
 This is a property of the published benchmark files, so it affects every paper that uses them. It is
 not specific to the two papers here. Neither paper states its abundance or endmember normalization.
 
+**The rows that use reference endmembers are oracles, not methods.** "NNLS-normalize with the reference
+M" reaches 0.002 / 0.004 because it repeats how the reference was computed. It is a reverse-engineering
+check and must not be compared with blind methods. The reference endmembers themselves are (near-)pure
+image pixels: Samson rock and tree are exact pixels, water is 0.02 rad from the nearest pixel, Jasper
+road is an exact pixel and the others are within 0.06 rad. VCA does not find them (best of 10 seeds:
+0.02–0.10 rad on Samson, 0.18–0.53 rad on Jasper).
+
+**Blind scores depend on the endmember-scale convention, so report raw and normalized side by side.**
+Peak normalization is learned from the reference files, so using it is mild leakage. VCA endmembers,
+10 seeds:
+
+| abundances from VCA endmembers | Samson aRMSE | Jasper aRMSE |
+|---|---|---|
+| FCLS, raw VCA | 0.261 | 0.239 |
+| NNLS-normalize, raw VCA (no ground-truth knowledge) | 0.128 | 0.157 |
+| NNLS-normalize, L2-normalized VCA (generic default) | 0.061 | 0.183 |
+| NNLS-normalize, peak-normalized VCA (reference convention) | 0.050 | 0.157 |
+
+The free per-pixel brightness factor (FCLS → NNLS-normalize, same raw endmembers) is the
+legitimate part of the gain. The further gain on Samson comes from the convention, mostly through the
+very dark water endmember. Protocol from here: fix the convention before running, and report every
+blind method raw and normalized.
+
 INSPECTION.md reported 0.077 for FCLS with the reference `M` on Jasper. With exact FCLS and the
 per-material aRMSE used in the papers it is 0.0845 (RMSE over all entries 0.0851). The older number
 came from the notebook's pseudo-inverse + clip + renormalize.
