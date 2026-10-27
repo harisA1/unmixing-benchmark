@@ -72,4 +72,6 @@ was provided.
 > and "honest" (best reconstruction error, no ground truth); 10 seeds; metrics: abundance RMSE overall
 > and per material, endmember SAD (blind methods), reconstruction RMSE. First reproduce each method's
 > published numbers approximately and report any large mismatch before running the full comparison.
+> model.py contains CompMP from the COMP-GCN project as a starting point for our own model in step 2;
+> read its "Adapting it to spectral unmixing" notes but do not build on it before step 1 is reported.
 > Commit to a branch, not main.
