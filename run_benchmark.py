@@ -71,20 +71,21 @@ def classical(d, seeds):
     return rows
 
 
-def deep(d, seeds, which):
+def deep(d, seeds, which, on_result=None):
     import torch
     from unmix import deep as D
     torch.set_num_threads(4)
     Y, R, L = d["Y"], d["A"].shape[0], d["Y"].shape[0]
     rows = []
 
-    def run(method, setting, seed, build, loss_fn, epochs, lr, wd=0.0, labels=None, adj=None):
+    def run(method, setting, seed, build, loss_fn, epochs, lr, wd=0.0, labels=None, adj=None, init="vca",
+            clip_grad=None):
         torch.manual_seed(seed)
-        Me = np.maximum(vca(Y, R, np.random.default_rng(seed))[0], 1e-6)
+        Me = np.maximum(vca(Y, R, np.random.default_rng(seed))[0], 1e-6) if init == "vca" else d["M"].copy()
         ctx = D.context(Y, d["shape"], labels, adj)
         model = build(Me)
         t = time.time()
-        A, Yh = D.train(model, ctx, loss_fn, epochs, lr, wd, seed)
+        A, Yh = D.train(model, ctx, loss_fn, epochs, lr, wd, seed, clip_grad=clip_grad)
         if hasattr(model, "dec"):
             Mest = model.dec.E.detach().numpy().astype(np.float64)
         else:
@@ -93,6 +94,8 @@ def deep(d, seeds, which):
         print(f"{d['name']:6s} {method:18s} {setting:24s} seed {seed}: "
               + " | ".join(f"{x['variant']} aRMSE {x['aRMSE']:.4f} mSAD {x.get('mSAD', np.nan):.4f}" for x in r),
               flush=True)
+        if on_result is not None:
+            on_result(r)
         return r
 
     n_sp = 200
@@ -132,6 +135,19 @@ def deep(d, seeds, which):
             rows += run("MGA-lite", "lam=.01,beta=1e-3,lr=3e-3,ep=400", seed,
                         lambda Me: D.MGALite(L, R, Me, S, torch.tensor(groups)), mga_loss, 400, 3e-3, 1e-5,
                         labels=lab50, adj=adj_sp)
+        # AE-SU (Ampas et al., GRSL 2025), notebook settings and variants; "ref" = initialized from the
+        # reference endmembers (the letter initializes from field-measured endmembers)
+        aesu_runs = {
+            "aesu":        ("AE-SU", "notebook,lr=1e-5,ep=200", "ref", 1e-5, {}),
+            "aesu-vca":    ("AE-SU", "notebook,lr=1e-5,ep=200,VCA init", "vca", 1e-5, {}),
+            "aesu-lr":     ("AE-SU", "lr=1e-3,ep=200", "ref", 1e-3, {}),
+            "aesu-linear": ("AE-SU w/o refine", "lr=1e-3,ep=200", "ref", 1e-3, {"refine": False}),
+        }
+        for key, (name, setting, init, lr, kw) in aesu_runs.items():
+            if key not in which:
+                continue
+            rows += run(name, setting, seed, lambda Me, kw=kw: D.AESU(L, R, Me, **kw),
+                        lambda A, Yh, m: D.aesu_loss(Yt, Yh, A, 0.01), 200, lr, init=init, clip_grad=1.0)
     return rows
 
 
@@ -144,14 +160,22 @@ if __name__ == "__main__":
     ap.add_argument("--tag", default="")
     a = ap.parse_args()
     OUT.mkdir(exist_ok=True)
+    path = OUT / f"{a.stage}{a.tag}.csv"
     rows = []
+
+    def save(new=()):
+        rows.extend(new)
+        keys = sorted({k for r in rows for k in r},
+                      key=lambda k: (k not in ("dataset", "method", "setting", "seed", "variant"), k))
+        with open(path, "w", newline="") as f:
+            w = csv.DictWriter(f, fieldnames=keys)
+            w.writeheader()
+            w.writerows(rows)
+
     for name in a.datasets:
         d = load(name)
-        rows += classical(d, a.seeds) if a.stage == "classical" else deep(d, a.seeds, a.models)
-    path = OUT / f"{a.stage}{a.tag}.csv"
-    keys = sorted({k for r in rows for k in r}, key=lambda k: (k not in ("dataset", "method", "setting", "seed", "variant"), k))
-    with open(path, "w", newline="") as f:
-        w = csv.DictWriter(f, fieldnames=keys)
-        w.writeheader()
-        w.writerows(rows)
+        if a.stage == "classical":
+            save(classical(d, a.seeds))
+        else:
+            deep(d, a.seeds, a.models, on_result=save)      # saved after every run
     print("wrote", path)

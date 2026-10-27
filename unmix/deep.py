@@ -214,6 +214,54 @@ class MGALite(nn.Module):
         return A, torch.einsum("nlr,nr->nl", Es, A)
 
 
+class AESU(nn.Module):
+    """AE-SU (Ampas et al., GRSL 2025), copied from AESU_Unmix_Embed_ZAZ_1.ipynb.
+
+    Spatial encoder (reflect-pad 3x3 conv, BN, ReLU, dilated 3x3 conv, BN, ReLU), spectral encoder (1-D
+    convs over wavelength per pixel, average-pooled), 1x1 fusion, softmax abundances, endmember matrix
+    initialized from given spectra and frozen for the first `freeze_epochs`, then a convolutional
+    refine layer applied to the reconstruction (refine=False drops it, leaving a strictly linear
+    decoder as described in the letter). The notebook does not clip endmembers; neither does this.
+    """
+    def __init__(self, L, R, M0, embed_dim=64, hid=32, refine=True, freeze_epochs=50):
+        super().__init__()
+        self.spatial = nn.Sequential(
+            nn.ReflectionPad2d(1), nn.Conv2d(L, hid, 3), nn.BatchNorm2d(hid), nn.ReLU(),
+            nn.Conv2d(hid, embed_dim, 3, dilation=2, padding=2), nn.BatchNorm2d(embed_dim), nn.ReLU())
+        self.spectral = nn.Sequential(
+            nn.Conv1d(1, hid, 5, padding=2), nn.BatchNorm1d(hid), nn.ReLU(),
+            nn.Conv1d(hid, embed_dim, 5, padding=2), nn.BatchNorm1d(embed_dim), nn.ReLU(),
+            nn.AdaptiveAvgPool1d(1))
+        self.fusion = nn.Sequential(nn.Conv2d(2 * embed_dim, embed_dim, 1), nn.BatchNorm2d(embed_dim), nn.ReLU())
+        self.logits = nn.Conv2d(embed_dim, R, 1)
+        self.dec = Decoder(M0)
+        self.dec.clip = lambda: None
+        self.refine = nn.Sequential(nn.ReflectionPad2d(1), nn.Conv2d(L, hid, 3), nn.ReLU(),
+                                    nn.ReflectionPad2d(1), nn.Conv2d(hid, L, 3)) if refine else None
+        self.freeze_epochs, self.embed_dim = freeze_epochs, embed_dim
+
+    def on_epoch(self, ep):
+        self.dec.E.requires_grad_(ep >= self.freeze_epochs)
+
+    def forward(self, ctx):
+        x = ctx["Ximg"]
+        _, L, H, W = x.shape
+        sp = self.spatial(x)
+        se = self.spectral(x.permute(0, 2, 3, 1).reshape(-1, 1, L)).squeeze(-1)
+        se = se.reshape(1, H, W, self.embed_dim).permute(0, 3, 1, 2)
+        Aimg = torch.softmax(self.logits(self.fusion(torch.cat([sp, se], 1))), 1)        # (1, R, H, W)
+        rec = torch.einsum("bkhw,lk->blhw", Aimg, self.dec.E)
+        if self.refine is not None:
+            rec = self.refine(rec)
+        perm = ctx["perm"]
+        return Aimg.flatten(2)[0].T[perm], rec.flatten(2)[0].T[perm]
+
+
+def aesu_loss(Y, Yh, A, lam=0.01):
+    """Notebook loss: MSE (mean over bands and pixels) + SAD + lam * mean(-a log a)."""
+    return ((Yh - Y) ** 2).mean() + sad_loss(Y, Yh) + lam * (-(A * torch.log(A + 1e-8)).mean())
+
+
 # ------------------------------------------------------------------ losses and training
 def sad_loss(Y, Yh):
     c = (Y * Yh).sum(1) / (Y.norm(dim=1) * Yh.norm(dim=1) + 1e-8)
@@ -243,15 +291,19 @@ def context(Y, shape, labels=None, adj=None):
     return ctx
 
 
-def train(model, ctx, loss_fn, epochs, lr, weight_decay=0.0, seed=0, log_every=0):
+def train(model, ctx, loss_fn, epochs, lr, weight_decay=0.0, seed=0, log_every=0, clip_grad=None):
     torch.manual_seed(seed)
     opt = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
     for ep in range(epochs):
+        if hasattr(model, "on_epoch"):
+            model.on_epoch(ep)
         model.train()
         opt.zero_grad()
         A, Yh = model(ctx)
         loss = loss_fn(A, Yh, model)
         loss.backward()
+        if clip_grad:
+            torch.nn.utils.clip_grad_norm_(model.parameters(), clip_grad)
         opt.step()
         if hasattr(model, "dec"):
             model.dec.clip()
