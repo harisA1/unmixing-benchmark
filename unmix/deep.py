@@ -28,15 +28,23 @@ from .data import to_image, from_image
 
 
 # ------------------------------------------------------------------ superpixels and graphs
-def superpixels(Y, shape, n_segments, compactness=0.1, n_pc=3):
-    """SLIC on the first PCA components (scaled to [0, 1]); returns labels (N,) in MATLAB pixel order."""
+def superpixels(Y, shape, n_target, compactness=10.0, n_pc=3):
+    """SLIC on the first PCA components (scaled to [0, 1]); returns labels (N,) in MATLAB pixel order.
+
+    skimage's connectivity step merges segments, so n_segments is increased until at least n_target
+    superpixels remain (the papers' "number of superpixels" is taken as the actual count)."""
     Yc = Y - Y.mean(1, keepdims=True)
     U = np.linalg.svd(Yc @ Yc.T)[0][:, :n_pc]
     P = U.T @ Yc
     P = (P - P.min(1, keepdims=True)) / (np.ptp(P, 1, keepdims=True) + 1e-12)
     img = np.moveaxis(to_image(P, shape), 0, -1)
-    lab = slic(img, n_segments=n_segments, compactness=compactness, channel_axis=-1, start_label=0,
-               enforce_connectivity=True)
+    n = n_target
+    while True:
+        lab = slic(img, n_segments=n, compactness=compactness, channel_axis=-1, start_label=0,
+                   enforce_connectivity=True, min_size_factor=0.2)
+        if lab.max() + 1 >= n_target or n > 20 * n_target:
+            break
+        n = int(n * 1.15) + 1
     lab = np.unique(lab, return_inverse=True)[1].reshape(lab.shape)   # consecutive labels
     return from_image(lab[None])[0]
 
