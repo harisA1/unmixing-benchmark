@@ -103,3 +103,37 @@ The same group reports VCA+FCLS on the same data with aRMSE 0.078 in one paper a
 Baseline numbers taken from these tables are not reliable. TANet's per-material numbers are identical
 in both papers except one Jasper SAD (tree 0.0451 against 0.0851, one digit apart). They were probably
 copied rather than rerun.
+
+## 4. AE-SU (Ampas et al., GRSL 2025): quick test, seed 0 only
+
+`unmix/deep.py: AESU` is copied from `AESU_Unmix_Embed_ZAZ_1.ipynb`: spatial and spectral conv encoders,
+softmax abundances, endmembers frozen for 50 epochs, a convolutional refine layer on the reconstruction,
+loss MSE + SAD + 0.01·entropy, gradient clipping at 1, 200 epochs, one Adam step per epoch.
+"Reference init" starts the endmembers at the reference `M`, the analogue of the letter's
+field-measured endmembers. One seed only; these numbers set direction and are not final.
+
+| AE-SU variant | Samson aRMSE | Samson recon SAD | Jasper aRMSE | Jasper recon SAD |
+|---|---|---|---|---|
+| notebook settings (lr 1e-5), reference init | 0.485 | 0.640 | 0.382 | 0.749 |
+| notebook settings (lr 1e-5), VCA init | 0.448 | 0.576 | 0.326 | 0.701 |
+| lr 1e-3, refine layer | 0.427 | 0.068 | 0.344 | 0.097 |
+| lr 1e-3, **no refine layer** (linear decoder) | **0.194** | 0.040 | **0.085** | 0.064 |
+| *uniform abundances* | *0.375* | | *0.342* | |
+| *FCLS, reference M (oracle)* | *0.410* | | *0.085* | |
+| *VCA + NNLS-normalize, raw scale (blind, 10 seeds)* | *0.128* | | *0.157* | |
+
+Abundances are the model's own output ("aligned" differs by at most 0.05 and is in the CSVs).
+
+1. **The notebook settings do not train.** With lr 1e-5 and 200 steps the reconstruction is still poor
+   (SAD 0.58–0.75 rad), and the abundances are no better than uniform.
+2. **The refine layer makes the abundances unidentifiable.** At lr 1e-3 with the refine layer the
+   reconstruction is good (SAD 0.07–0.10) but the abundances stay at uniform level: the convolution on
+   E·A does the reconstruction instead of the abundances. The letter describes a strictly linear
+   decoder; the notebook's decoder is not linear.
+3. **Without the refine layer AE-SU works.** On Jasper it matches FCLS with the same (reference)
+   endmembers, 0.085, and beats the blind VCA pipeline. On Samson it beats FCLS (0.194 vs 0.410, mostly
+   because SAD is brightness-invariant) but not NNLS-normalize with the same endmembers (0.002, oracle).
+4. **Training moves the endmembers away from the truth.** Starting at mSAD 0, the no-refine variant
+   ends at 0.12 (Samson) and 0.18 (Jasper). Keeping the endmembers fixed, or training them more
+   slowly, is the next thing to test. That is also the clean version of the letter's comparison:
+   same known endmembers, AE-SU against FCLS and NNLS-normalize.
