@@ -70,9 +70,9 @@ def main():
                 model, cfg = build(name)
                 t = time.time()
                 try:
-                    if name in SUPERVISED:      # known endmembers: the reference ones, as for FCLS[ref M]
-                        Mest = d["M"]
-                        A = np.asarray(model.compute_abundances(Y, Mest, H=H, W=W))
+                    if name in SUPERVISED:      # known endmembers: reference, peak-normalized (as run_spatial.py)
+                        Mest = d["M"] / d["M"].max(0)
+                        A = np.asarray(model.compute_abundances(Y, Mest, H=H, W=W, seed=seed))
                         r = rows_for(d, f"HySUPP {name} [ref M]", "default", seed, A, Mest, permute=False,
                                      t=time.time() - t, variants=False)
                     else:
