@@ -36,6 +36,12 @@ SUPERVISED = {"UnDIP": "UnDIP"}
 
 def build(name):
     cfg = yaml.safe_load(open(HYSUPP / "config" / "model" / f"{name}.yaml"))
+    for k, v in cfg.items():            # PyYAML reads "1e-3" as a string; hydra/OmegaConf reads a float
+        if isinstance(v, str):
+            try:
+                cfg[k] = float(v)
+            except ValueError:
+                pass
     target = cfg.pop("name")
     mod, cls = target.rsplit(".", 1)
     return getattr(importlib.import_module(mod), cls)(**cfg), cfg
