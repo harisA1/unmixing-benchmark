@@ -137,3 +137,70 @@ Abundances are the model's own output ("aligned" differs by at most 0.05 and is 
    ends at 0.12 (Samson) and 0.18 (Jasper). Keeping the endmembers fixed, or training them more
    slowly, is the next thing to test. That is also the clean version of the letter's comparison:
    same known endmembers, AE-SU against FCLS and NNLS-normalize.
+
+## 5. HySUPP models (Rasti et al. 2023), default settings, seed 0, clean data
+
+Run with `run_hysupp.py`: HySUPP's models called directly with their default `config/model/*.yaml`,
+on our data and metrics. MATLAB-only methods and the library-based (semi-supervised) methods were not run.
+
+| blind | Samson aRMSE own / aligned | Samson mSAD | Jasper aRMSE own / aligned | Jasper mSAD | time (Samson / Jasper) |
+|---|---|---|---|---|---|
+| AA | 0.287 / 0.108 | 0.066 | 0.129 / **0.071** | **0.099** | 8 s / 13 s |
+| EDAA | 0.275 / 0.107 | 0.070 | 0.220 / 0.194 | 0.149 | 15.5 / 10.5 min |
+| CNNAEU | 0.147 / 0.147 | 0.044 | 0.202 / 0.197 | 0.142 | 1 / 2 min |
+| *VCA + NNLS-normalize, raw scale (10 seeds)* | *0.128* | *0.067* | *0.157* | *0.340* | *seconds* |
+
+| known endmembers (reference, peak-normalized) | Samson aRMSE | Jasper aRMSE |
+|---|---|---|
+| UnDIP | 0.4099 | 0.2134 |
+| FCLS | 0.4099 | 0.2134 |
+
+- **AA finds Jasper's endmembers** (mSAD 0.099 against 0.34 for VCA and 0.24–0.41 for every deep model
+  started from VCA), in 13 s. It is the natural initialization for blind deep models on Jasper.
+- **UnDIP equals FCLS on clean data**: it is built on the sum-to-one FCLS solution, without the free
+  per-pixel brightness the reference has, so its spatial prior cannot help here.
+
+## 6. CompUnmix: compositional message passing for unmixing (known endmembers, seed 0)
+
+`unmix/compunmix.py`, `run_spatial.py`. Unrolled unmixing: per-pixel NNLS-normalize start (skip
+connection), then 3 layers of [gated message passing on the 8-neighbour grid with spectral-angle
+attention, followed by projected-gradient data-consistency steps with a free per-pixel brightness].
+Geometry B: Fisher–Rao (states √a on the sphere, zeros allowed). Geometry C: Aitchison (clr with zeros
+replaced by ε = 1e-3; the data step restores exact zeros). Trained without labels by a **band-split
+loss**: unmix with a random half of the bands, score the spectral angle on the other half, so pooling
+neighbours pays only when it removes noise (with the plain reconstruction loss the per-pixel solution
+is optimal and message passing switches off).
+
+Experiment: white Gaussian noise added at 30/20/10 dB (fixed seed), target always the clean reference
+abundances, all methods with the same known endmembers (reference, peak-normalized). aRMSE:
+
+| Samson | clean | 30 dB | 20 dB | 10 dB |
+|---|---|---|---|---|
+| NNLS-normalize (per pixel) | **0.0019** | 0.0166 | 0.0436 | 0.1016 |
+| NNLS-normalize on 3×3-mean Y | 0.0316 | 0.0322 | 0.0358 | 0.0557 |
+| NNLS-normalize + 3×3 mean of A | 0.0291 | 0.0299 | 0.0353 | 0.0567 |
+| NNLS-normalize + edge-aware smoothing | 0.0077 | 0.0183 | 0.0413 | 0.0743 |
+| FCLS / FCLS-TV (no brightness) | 0.41 | 0.41 | 0.41 | 0.41 |
+| **CompUnmix B (Fisher–Rao)** | 0.0033 | **0.0106** | **0.0225** | **0.0438** |
+| **CompUnmix C (Aitchison)** | 0.0028 | 0.0120 | 0.0230 | 0.0509 |
+
+| Jasper | clean | 30 dB | 20 dB | 10 dB |
+|---|---|---|---|---|
+| NNLS-normalize (per pixel) | **0.0042** | **0.0087** | 0.0211 | 0.0556 |
+| NNLS-normalize on 3×3-mean Y | 0.0693 | 0.0694 | 0.0699 | 0.0734 |
+| NNLS-normalize + 3×3 mean of A | 0.0665 | 0.0666 | 0.0672 | 0.0724 |
+| NNLS-normalize + edge-aware smoothing | 0.0302 | 0.0352 | 0.0434 | 0.0632 |
+| FCLS / FCLS-TV (no brightness) | 0.21 | 0.21 | 0.21 | 0.21 |
+| **CompUnmix B (Fisher–Rao)** | 0.0062 | 0.0093 | **0.0187** | 0.0428 |
+| **CompUnmix C (Aitchison)** | 0.0066 | 0.0097 | 0.0192 | **0.0425** |
+
+- Under noise, CompUnmix beats the per-pixel solve and every non-learned smoothing baseline: about 2×
+  on Samson, 10–23% on Jasper at 20–10 dB. On Jasper at 30 dB it is slightly worse than per pixel.
+- On clean data it costs little (0.002 → 0.003), far less than fixed smoothing (0.008–0.07).
+- The learned gates behave as intended: about 0.05–0.08 on clean data, 0.3–0.6 under noise.
+- Fisher–Rao and Aitchison are about equal; Fisher–Rao slightly better at 10 dB on Samson.
+
+**Not yet shown (needed before any claim):** a brightness-aware TV baseline (NNLS-TV, the fair
+SUnSAL-TV), denoise-then-unmix, an arithmetic message-passing ablation (variant A) to test whether the
+compositional geometry matters, multiple seeds and noise realizations, and a second setting (blind
+endmembers, a synthetic scene with spatial ground truth, or real data with independent validation).
